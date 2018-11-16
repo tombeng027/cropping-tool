@@ -10,7 +10,6 @@ import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -20,15 +19,18 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.ImageTypeSpecifier;
 import javax.imageio.ImageWriteParam;
 import javax.imageio.ImageWriter;
-import javax.imageio.metadata.IIOInvalidTreeException;
 import javax.imageio.metadata.IIOMetadata;
+import javax.imageio.metadata.IIOMetadataFormatImpl;
+import javax.imageio.metadata.IIOMetadataNode;
 import javax.imageio.plugins.jpeg.JPEGImageWriteParam;
 import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.ImageOutputStream;
@@ -39,35 +41,15 @@ import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.pdmodel.encryption.InvalidPasswordException;
 
 import com.github.jaiimageio.impl.plugins.tiff.TIFFImageReader;
-import com.github.jaiimageio.plugins.tiff.BaselineTIFFTagSet;
-import com.github.jaiimageio.plugins.tiff.TIFFDirectory;
-import com.github.jaiimageio.plugins.tiff.TIFFField;
 import com.github.jaiimageio.plugins.tiff.TIFFImageWriteParam;
-import com.github.jaiimageio.plugins.tiff.TIFFTag;
 import com.itextpdf.kernel.geom.Rectangle;
-import com.itextpdf.kernel.pdf.PdfArray;
-import com.itextpdf.kernel.pdf.PdfDictionary;
 import com.itextpdf.kernel.pdf.PdfDocument;
-import com.itextpdf.kernel.pdf.PdfName;
-import com.itextpdf.kernel.pdf.PdfPage;
 import com.itextpdf.kernel.pdf.PdfReader;
-import com.itextpdf.kernel.pdf.PdfResources;
-import com.itextpdf.kernel.pdf.PdfWriter;
-import com.itextpdf.kernel.pdf.canvas.PdfCanvas;
 import com.svi.objects.Word;
 
 
-
 public class CroppingTool {
-	//Extremities/Outermost points in an image
-	private static double leftMostPoint = 0;
-	private static double rightMostPoint = 0;
-	private static double highestPoint = 0;
-	private static double lowestPoint = 0;
-
-	private static int croppedWidth = 0;
-	private static int croppedHeight = 0;
-
+	
 	public static void main(String[] args) throws IOException {
 		// TODO Auto-generated method stub
 		initializeConfig();
@@ -77,31 +59,57 @@ public class CroppingTool {
 		String tiff = "_cropped.tif";
 		String jpg = "_cropped.jpg";
 		String pdf = "_cropped.pdf";
-		String[] temp = imageInputFolder.getAbsolutePath().split("\\\\");
-		String inputFolder = temp[temp.length -1];
+		String inputFolder = imageInputFolder.getName(); //image input folder name use for creating the cropped images output folder
 		//for compiling the inputs into a list
 		List<File> fileImages = new ArrayList<>();
 		List<File> fileCoordinates = new ArrayList<>();
 		listFiles(imageInputFolder, fileImages);
 		listFiles(coordinateInputFolder, fileCoordinates);
+		int CPUCores =  Runtime.getRuntime().availableProcessors();
+		ExecutorService pool = Executors.newFixedThreadPool(CPUCores);
+		ThreadPoolExecutor executor = (ThreadPoolExecutor) pool;
 		
 		//loop to process each image in the list
+		long start = System.currentTimeMillis();
 		for(File image : fileImages){
-			List<Word> wordsInImage = new ArrayList<>();
+			pool.submit(()->{List<Word> wordsInImage = new ArrayList<>();
 			boolean done = false;
 			String fileNameWithoutExt = image.getName().substring(0, image.getName().length() - 4);
 			String fileExtension = (image.getName().substring(image.getName().length() - 3));
-			if(fileExtension.equals("jpg")){
-				getCoordinateFileAndProcessImage(useCustomOutput, done, image, inputFolder, fileNameWithoutExt, jpg, fileExtension, fileCoordinates, wordsInImage);
-			}else if(fileExtension.equals("tif")){
-				getCoordinateFileAndProcessImage(useCustomOutput, done, image, inputFolder, fileNameWithoutExt, tiff, fileExtension, fileCoordinates, wordsInImage);
-			}else if(fileExtension.equals("pdf")){
-				getCoordinateFileAndProcessPDF(useCustomOutput, done, image, inputFolder, fileNameWithoutExt, pdf, fileExtension, fileCoordinates, wordsInImage);
+			try {
+				if(fileExtension.equals("jpg")){
+					getCoordinateFileAndProcessImage(useCustomOutput, done, image, inputFolder, fileNameWithoutExt, jpg, fileExtension, fileCoordinates, wordsInImage);
+				}else if(fileExtension.equals("tif")){
+					getCoordinateFileAndProcessImage(useCustomOutput, done, image, inputFolder, fileNameWithoutExt, tiff, fileExtension, fileCoordinates, wordsInImage);
+				}else if(fileExtension.equals("pdf")){
+					getCoordinateFileAndProcessPDF(useCustomOutput, done, image, inputFolder, fileNameWithoutExt, pdf, fileExtension, fileCoordinates, wordsInImage);
+				}
+			} catch (Exception e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}finally{
+				System.out.println("Thread Name: " + Thread.currentThread().getName() + "\n File Being Processed: " + image.getName());
+				System.out.println("Tasks Remaining: " + executor.getQueue().size());
+				System.out.println("Current Active Threads: " + executor.getActiveCount());
 			}
+			});
 		}
-		System.out.println("Done Cropping Images.");
-		   
+		System.out.println("Total Tasks: " + executor.getTaskCount());
+		System.out.println("Threads To Be Used: " + executor.getMaximumPoolSize());
+		pool.shutdown();
+		try {
+			pool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+		} catch (InterruptedException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		} finally {
+			long end = System.currentTimeMillis();
+			System.out.println("Done Cropping Images.");
+			System.out.println("Total Process Time : " + (end - start)/1000 + "secs");
+		}
 	}
+	
+	
 	/**
 	 * 					method to process PDF files
 	 * @param useCustomOutput
@@ -117,13 +125,24 @@ public class CroppingTool {
 	 */
 	public static void getCoordinateFileAndProcessPDF(boolean useCustomOutput, boolean done, File image, String inputFolder, String fileNameWithoutExt
 			, String ext, String fileExtension, List<File> fileCoordinates, List<Word> wordsInImage) throws IOException{
-		Map<String, List<Word>> wordMap = new HashMap<>();
+		/*Map for the extremeties/ variables to be used for cropping, previously static variables but changed to map 
+		 so that it will not be interfering with the multithreading
+		 */
+		Map<String, Double> coordinateMap = new HashMap<String,Double>();
+		coordinateMap.put("leftMostPoint", 0.0);
+		coordinateMap.put("rightMostPoint", 0.0);
+		coordinateMap.put("highestPoint", 0.0);
+		coordinateMap.put("lowestPoint", 0.0);
+		coordinateMap.put("croppedWidth", 0.0);
+		coordinateMap.put("croppedHeight", 0.0);
+		//Extremities/Outermost points in an image		
+//		Map<String, List<Word>> wordMap = new HashMap<>();
 		File croppedImageOutputFolder = new File(image.getParentFile().getAbsolutePath().replaceAll(inputFolder, "cropped images"));
 		if(useCustomOutput)croppedImageOutputFolder = new File(AppConfig.OUTPUT_PATH.value());
 		if(!croppedImageOutputFolder.exists())croppedImageOutputFolder.mkdirs();
 		String outputName = fileNameWithoutExt + ext;;
-		String newCoordinateName = image.getName().substring(0, image.getName().length() - 4) + " new_coordinates.txt";
-		File newCoordinateFileOutput = new File(croppedImageOutputFolder + "/" + newCoordinateName);
+//		String newCoordinateName = image.getName().substring(0, image.getName().length() - 4) + " new_coordinates.txt";
+//		File newCoordinateFileOutput = new File(croppedImageOutputFolder + "/" + newCoordinateName); commented out because when cropping pdf the coordinates doesnt change
 		String imageName = image.getName().substring(0, image.getName().length() - 4);
 		System.out.println("Processing " + image.getName());
 			//loop for selecting the corresponding coordinate file in the list
@@ -132,8 +151,8 @@ public class CroppingTool {
 				if(coordinateName.equalsIgnoreCase(imageName)){
 					System.out.println("Using coordinate file " + coordinate.getName());							
 					File ouputImageFile = new File(croppedImageOutputFolder + "/" + outputName);
-					getCoordinates(coordinate,wordsInImage, fileExtension);
-					cropPDFv2(image, ouputImageFile);
+					getCoordinates(coordinate,wordsInImage, fileExtension, coordinateMap);
+					cropPDFv2(image, ouputImageFile, coordinateMap);
 //					cropPDF(image.getAbsolutePath(), ouputImageFile.getAbsolutePath());
 					System.out.println();
 					System.out.println("done writing " + outputName);
@@ -143,7 +162,7 @@ public class CroppingTool {
 				}
 			}
 			if(done == true){
-//				adjustWordCoordinates(wordsInImage);
+//				adjustWordCoordinates(wordsInImage);	commented out as coordinates doesnt change when cropping pdf, so no need to recalc
 //				compileWordMap(wordsInImage, wordMap);
 //				writeNewCoordinateFile(wordMap, newCoordinateFileOutput);
 				resetExtremes();
@@ -159,20 +178,20 @@ public class CroppingTool {
 	 * @throws InvalidPasswordException
 	 * @throws IOException
 	 */
-	public static void cropPDFv2(File input, File output) throws InvalidPasswordException, IOException{
+	public static void cropPDFv2(File input, File output, Map<String, Double> coordinateMap) throws InvalidPasswordException, IOException{
 		PDDocument doc = PDDocument.load(new File(input.getAbsolutePath()));
 		PDPage page = doc.getPage(0);
 		PdfDocument pdfDoc = new PdfDocument(new PdfReader(input));
 		 Rectangle pageSize = pdfDoc.getPage(1).getPageSize();
-		 float llx = (float) (leftMostPoint - pageSize.getWidth()*.01);
-         float lly = (float) (lowestPoint - pageSize.getHeight()*.01);
-         float w = (float) (rightMostPoint - leftMostPoint + ((pageSize.getWidth()*.01)*2));
-         float h = (float) (highestPoint - lowestPoint + ((pageSize.getHeight()*.01)*2));
+		 float llx = (float) (coordinateMap.get("leftMostPoint") - pageSize.getWidth()*.01);
+         float lly = (float) (coordinateMap.get("lowestPoint") - pageSize.getHeight()*.01);
+         float w = (float) (coordinateMap.get("rightMostPoint")- coordinateMap.get("leftMostPoint") + ((pageSize.getWidth()*.01)*2));
+         float h = (float) (coordinateMap.get("highestPoint") - coordinateMap.get("lowestPoint") + ((pageSize.getHeight()*.01)*2));
          if(llx < 0) llx = 0f;
          if(lly < 0) lly = 0f;
          
-         croppedWidth = (int) llx;
-         croppedHeight = (int) lly;
+         coordinateMap.replace("croppedWidth", (double) llx);
+         coordinateMap.replace("croppedHeight", (double) lly);
          
          System.out.printf("The origins are x: %f and y : %f",llx,lly);
          System.out.println("The new width is : " + w);
@@ -247,6 +266,16 @@ public class CroppingTool {
 	 */
 	public static void getCoordinateFileAndProcessImage(boolean useCustomOutput, boolean done, File image, String inputFolder, String fileNameWithoutExt
 			, String ext, String fileExtension, List<File> fileCoordinates, List<Word> wordsInImage) throws IOException{
+		/*Map for the extremeties/ variables to be used for cropping, previously static variables but changed to map 
+		 so that it will not be interfering with the multithreading
+		 */
+		Map<String, Double> coordinateMap = new HashMap<String,Double>();
+		coordinateMap.put("leftMostPoint", 0.0);
+		coordinateMap.put("rightMostPoint", 0.0);
+		coordinateMap.put("highestPoint", 0.0);
+		coordinateMap.put("lowestPoint", 0.0);
+		coordinateMap.put("croppedWidth", 0.0);
+		coordinateMap.put("croppedHeight", 0.0);
 		Map<String, List<Word>> wordMap = new HashMap<>();
 		File croppedImageOutputFolder = new File(image.getParentFile().getAbsolutePath().replaceAll(inputFolder, "cropped images"));
 		if(useCustomOutput)croppedImageOutputFolder = new File(AppConfig.OUTPUT_PATH.value());
@@ -262,9 +291,9 @@ public class CroppingTool {
 				if(coordinateName.equalsIgnoreCase(imageName + "_" + fileExtension)){
 					System.out.println("Using coordinate file " + coordinate.getName());							
 					File ouputImageFile = new File(croppedImageOutputFolder + "/" + outputName);
-					getCoordinates(coordinate,wordsInImage, fileExtension);
+					getCoordinates(coordinate,wordsInImage, fileExtension,coordinateMap);
 					BufferedImage test = ImageIO.read(image);
-					cropImage(test, ouputImageFile, fileExtension, image);
+					cropImage(test, ouputImageFile, fileExtension, image, coordinateMap);
 					System.out.println();
 					System.out.println("done writing " + outputName);
 					System.out.println();
@@ -273,7 +302,7 @@ public class CroppingTool {
 				}
 			}
 			if(done == true){
-				adjustWordCoordinates(wordsInImage);
+				adjustWordCoordinates(wordsInImage,coordinateMap);
 				compileWordMap(wordsInImage, wordMap);
 				writeNewCoordinateFile(wordMap, newCoordinateFileOutput);
 				resetExtremes();
@@ -289,18 +318,18 @@ public class CroppingTool {
 	 * @param output			- cropped jpg image output
 	 * @throws IOException
 	 */
-	public static void cropImage(BufferedImage bufferedImage, File output, String ext, File image) throws IOException{
+	public static void cropImage(BufferedImage bufferedImage, File output, String ext, File image, Map<String, Double> coordinateMap) throws IOException{
 		//setting up/computing the parameters for the cropped image
 		double heightOrigin = bufferedImage.getHeight();
 		double widthOrigin = bufferedImage.getWidth();
 		double heightDiff = bufferedImage.getHeight() * 0.01;	//top & bottom margin
 		double widthDiff = bufferedImage.getWidth() * 0.01;  //left and right margin
-		int x = (int) (leftMostPoint - widthDiff) + 1; // leftmost origin of the cropped image(+1 to compensate the decimal)
-		int y = (int) (highestPoint - heightDiff) + 1;// topmost origin of the cropped image(+1 to compensate the decimal)
+		int x = (int) (coordinateMap.get("leftMostPoint") - widthDiff) + 1; // leftmost origin of the cropped image(+1 to compensate the decimal)
+		int y = (int) (coordinateMap.get("highestPoint") - heightDiff) + 1;// topmost origin of the cropped image(+1 to compensate the decimal)
 		if(x < 0) x = 0;	//0 to prevent negative coordinates
 		if(y < 0) y = 0;
-		int width = (int) (rightMostPoint - x + widthDiff) + 1; //width of the cropped image
-		int height = (int) (lowestPoint - y + heightDiff) + 1;	//height of the cropped image
+		int width = (int) (coordinateMap.get("rightMostPoint") - x + widthDiff) + 1; //width of the cropped image
+		int height = (int) (coordinateMap.get("lowestPoint") - y + heightDiff) + 1;	//height of the cropped image
 		if(width > widthOrigin) width = (int) widthOrigin;	//for preventing error when the computed new width is greater the original width
 		if(height > heightOrigin) height = (int) heightOrigin;
 		if(y > 0 && (y + height) > heightOrigin){
@@ -309,17 +338,18 @@ public class CroppingTool {
 		if(x > 0 && (x + width) > widthOrigin){
 			x = (int) Math.abs((x + width) - (x + widthOrigin));	
 		}
-		croppedWidth = x;
-		croppedHeight = y;
-		System.out.println("The crop will start at x coordinate " + x + " y coordinate " + y);
-		System.out.println("The width margin will be : " + widthDiff);
-		System.out.println("The height margin will be : " + heightDiff);
-		System.out.println("The cropped image width is " + (width));
-		System.out.println("The cropped image height is " + (height));
-		System.out.println("The original width is " + widthOrigin);
-		System.out.println("The original height is " + heightOrigin);
-		System.out.println("Writing cropped image to file...");
-		System.out.println(output.getAbsolutePath());
+		coordinateMap.replace("croppedWidth", (double) x);
+		coordinateMap.replace("croppedHeight", (double) y);
+		System.out.println("\n Thread Name: " + Thread.currentThread().getName() + " Filename: " + image.getName() + "\n" +
+		"The crop will start at x coordinate " + x + " y coordinate " + y + "\n" +
+		"The width margin will be : " + widthDiff + "\n" +
+		"The height margin will be : " + heightDiff + "\n" +
+		"The cropped image width is " + (width) + "\n" +
+		"The cropped image height is " + (height) + "\n" +
+		"The original width is " + widthOrigin + "\n" +
+		"The original height is " + heightOrigin + "\n" +
+		"Writing cropped image to file..." + "\n" +
+		output.getAbsolutePath() + "\n");
 		if(ext.equals("jpg")){
 			cropJPGImage(bufferedImage, output, x, y, width, height, ext, image);		
 		}else if(ext.equals("tif")){
@@ -384,13 +414,16 @@ public class CroppingTool {
         OutputStream os = new FileOutputStream(output);
         ImageOutputStream ios = ImageIO.createImageOutputStream(os);
 	    writer.setOutput(ios);
-	    float quality = 0.5f;
-	    param.setCompressionType("PackBits");
-	    param.setCompressionQuality(quality);  
+	    float quality = 0.5f;  
 	    TIFFImageReader reader = (TIFFImageReader) ImageIO.getImageReader(writer);
 	    ImageInputStream stream = ImageIO.createImageInputStream(image);
 	    reader.setInput(stream);
 	    IIOMetadata meta = reader.getImageMetadata(0);
+	    IIOMetadataNode root = (IIOMetadataNode) meta.getAsTree(IIOMetadataFormatImpl.standardMetadataFormatName);
+	    IIOMetadataNode compression = (IIOMetadataNode) root.getElementsByTagName("CompressionTypeName").item(0);
+	    String compressionName = compression.getAttribute("value");			//get the compression type of the input image
+	    param.setCompressionType(compressionName);
+	    param.setCompressionQuality(quality);
 	    writer.write(meta, new IIOImage(croppedImage, null, meta), param);
         ios.close();
         os.close();
@@ -419,7 +452,7 @@ public class CroppingTool {
 	 * @throws IOException
 	 */
 	@SuppressWarnings("unused")
-	public static void getCoordinates(File coordinatesFile,List<Word> wordsInImage, String ext) throws IOException{
+	public static void getCoordinates(File coordinatesFile,List<Word> wordsInImage, String ext, Map<String, Double> coordinateMap) throws IOException{
 		BufferedReader reader = new BufferedReader(new FileReader(coordinatesFile));
 		int minWordLength = Integer.parseInt(AppConfig.MIN_WORD_LENGTH.value());
 		String line = null;
@@ -428,7 +461,8 @@ public class CroppingTool {
 		String upperRightPoint = "";
 		String lowerRightPoint = "";
 		String word = "";
-		boolean extremesAreNull = (lowestPoint == 0 && highestPoint == 0 && leftMostPoint == 0 && rightMostPoint == 0);
+		boolean extremesAreNull = ((double)coordinateMap.get("lowestPoint") == 0 && (double)coordinateMap.get("highestPoint") == 0 &&
+				(double)coordinateMap.get("leftMostPoint") == 0 && (double)coordinateMap.get("rightMostPoint") == 0);
 		boolean isPDF = ext.equals("pdf");
 		System.out.println("getting coordinate extremities");
 		while((line = reader.readLine()) != null){
@@ -470,21 +504,30 @@ public class CroppingTool {
 						String[] leftMostAndHighest = upperLeftPoint.split(" , ");
 						String[] rightMostAndLowest = lowerRightPoint.split(" , ");
 						if(extremesAreNull){
-							leftMostPoint = Double.parseDouble(leftMostAndHighest[0]);	
-							highestPoint = Double.parseDouble(leftMostAndHighest[1]);
-							rightMostPoint = Double.parseDouble(leftMostAndHighest[1]);
-							lowestPoint = Double.parseDouble(rightMostAndLowest[1]);
-							extremesAreNull = (lowestPoint == 0 && highestPoint == 0 && leftMostPoint == 0 && rightMostPoint == 0);
+							coordinateMap.replace("leftMostPoint", Double.parseDouble(leftMostAndHighest[0]));	
+							coordinateMap.replace("highestPoint", Double.parseDouble(leftMostAndHighest[1]));	
+							coordinateMap.replace("rightMostPoint", Double.parseDouble(leftMostAndHighest[1]));
+							coordinateMap.replace("lowestPoint", Double.parseDouble(rightMostAndLowest[1]));
+							extremesAreNull = ((double)coordinateMap.get("lowestPoint") == 0 && (double)coordinateMap.get("highestPoint") == 0 &&
+									(double)coordinateMap.get("leftMostPoint") == 0 && (double)coordinateMap.get("rightMostPoint") == 0);
 						}else if(isPDF){
-							leftMostPoint = Math.min(leftMostPoint, Double.parseDouble(leftMostAndHighest[0]));
-							lowestPoint = Math.min(lowestPoint, Double.parseDouble(rightMostAndLowest[1]));
-							highestPoint = Math.max(highestPoint, Double.parseDouble(leftMostAndHighest[1]));
-							rightMostPoint = Math.max(rightMostPoint, Double.parseDouble(rightMostAndLowest[0]));
+							coordinateMap.replace("leftMostPoint", Math.min((double)coordinateMap.get("leftMostPoint"),
+									Double.parseDouble(leftMostAndHighest[0])));
+							coordinateMap.replace("lowestPoint", Math.min((double)coordinateMap.get("lowestPoint"), 
+									Double.parseDouble(rightMostAndLowest[1])));
+							coordinateMap.replace("highestPoint", Math.max((double)coordinateMap.get("highestPoint"), 
+									Double.parseDouble(leftMostAndHighest[1])));
+							coordinateMap.replace("rightMostPoint", Math.max((double)coordinateMap.get("rightMostPoint"), 
+									Double.parseDouble(rightMostAndLowest[0])));
 						}else{
-							leftMostPoint = Math.min(leftMostPoint, Double.parseDouble(leftMostAndHighest[0]));
-							highestPoint = Math.min(highestPoint, Double.parseDouble(leftMostAndHighest[1]));
-							rightMostPoint = Math.max(rightMostPoint, Double.parseDouble(rightMostAndLowest[0]));
-							lowestPoint = Math.max(lowestPoint, Double.parseDouble(rightMostAndLowest[1]));
+							coordinateMap.replace("leftMostPoint", Math.min((double)coordinateMap.get("leftMostPoint"), 
+									Double.parseDouble(leftMostAndHighest[0])));
+							coordinateMap.replace("highestPoint", Math.min((double)coordinateMap.get("highestPoint"), 
+									Double.parseDouble(leftMostAndHighest[1])));
+							coordinateMap.replace("rightMostPoint", Math.max((double)coordinateMap.get("rightMostPoint"), 
+									Double.parseDouble(rightMostAndLowest[0])));
+							coordinateMap.replace("lowestPoint", Math.max((double)coordinateMap.get("lowestPoint"), 
+									Double.parseDouble(rightMostAndLowest[1])));
 						}
 						wordsInImage.add(new Word(word,lowerLeftPoint.split(" , "), upperLeftPoint.split(" , "), 
 								lowerRightPoint.split(" , "), upperRightPoint.split(" , ")));
@@ -523,12 +566,12 @@ public class CroppingTool {
 	 * 		used at the end of the for loop when changing the input image
 	 */
 	public static void resetExtremes(){
-		leftMostPoint = 0;
-		rightMostPoint = 0;
-		highestPoint = 0; 
-		lowestPoint = 0;
-		croppedHeight = 0;
-		croppedWidth = 0;
+//		leftMostPoint = 0;
+//		rightMostPoint = 0;
+//		highestPoint = 0; 
+//		lowestPoint = 0;
+//		croppedHeight = 0;
+//		croppedWidth = 0;
 	}
 	
 	/**
@@ -536,9 +579,9 @@ public class CroppingTool {
 	 * 			when cropping
 	 * @param wordList	-	is the list of words found in the image
 	 */
-	public static void adjustWordCoordinates(List<Word> wordList){
+	public static void adjustWordCoordinates(List<Word> wordList, Map<String,Double> coordinateMap){
 		for(Word w : wordList){
-			w.adjustCoordinates(croppedWidth, croppedHeight);
+			w.adjustCoordinates((int)Math.round(coordinateMap.get("croppedWidth")), (int)Math.round(coordinateMap.get("croppedHeight")));
 		}
 	}
 	
